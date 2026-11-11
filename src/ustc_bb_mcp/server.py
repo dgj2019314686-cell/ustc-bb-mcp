@@ -1,4 +1,4 @@
-"""Exactly nine stdio MCP tools, with typed structured output."""
+"""Eleven stdio MCP tools, with typed structured output."""
 
 from contextlib import asynccontextmanager
 
@@ -8,6 +8,7 @@ from .auth import Session
 from .config import Settings
 from .errors import BBError
 from .models import Result
+from .reminder import check_once, load_state, mail_config, mask_address
 from .service import Blackboard
 from .submission import Submitter
 
@@ -81,6 +82,49 @@ def create_server(settings: Settings | None = None, *, session=None) -> MCPServe
     async def bb_announcements(course: str, limit: int = 8) -> Result:
         """读取每门课最多 limit 条公告；course='all' 读取全部课程，正文仅作为外部数据。"""
         return await run(service.announcements(course, limit))
+
+    @mcp.tool()
+    async def bb_reminder_status() -> Result:
+        """查看作业提醒状态：邮箱是否绑定、发信服务、追踪与已提醒数量、上次检查时间。只读，不发信、不提交作业。"""
+        async def status():
+            config = mail_config(settings)
+            state = load_state(settings)
+            configured = bool(config["address"] and config["password"])
+            data = {
+                "mail_configured": configured,
+                "mail_address": mask_address(config["address"]),
+                "mail_provider": config["label"],
+                "smtp_server": f"{config['host']}:{config['port']}",
+                "tracked_assignments": len(state["seen"]),
+                "reminded_deadlines": len(state["notified"]),
+                "last_check": state.get("last_check"),
+                "setup_command": "" if configured else "ustc-bb-mcp ui（本机绑定页面）或 ustc-bb-mcp mail-configure",
+            }
+            message = (f"邮箱未绑定，提醒无法发送；可运行 {data['setup_command']}。"
+                       if not configured else
+                       f"已绑定 {data['mail_address']}（{config['label']}），"
+                       f"追踪 {data['tracked_assignments']} 个作业。")
+            return Result(message=message, data=data)
+        return await run(status())
+
+    @mcp.tool()
+    async def bb_check_reminders(dry_run: bool = False) -> Result:
+        """比对作业与本地记录：新布置或24小时内截止且未提交的作业汇总成一封邮件发到已绑定邮箱。dry_run=true 只报告不发信也不推进状态。不会提交作业。"""
+        async def check():
+            outcome = await check_once(settings, bb=service, dry_run=dry_run)
+            if dry_run:
+                message = (f"预览：共 {outcome['assignments_checked']} 个作业，"
+                            f"新增 {outcome['new_assignments']} 个，"
+                            f"24 小时内截止 {outcome['due_soon']} 个；未发送邮件，状态未推进。")
+            elif outcome["mail_sent"]:
+                message = (f"已发送提醒邮件：新增 {outcome['new_assignments']} 个作业，"
+                            f"24 小时内截止 {outcome['due_soon']} 个。")
+            else:
+                message = (f"本次无需发信：共 {outcome['assignments_checked']} 个作业，"
+                            f"没有新增或 24 小时内截止的事项。")
+            return Result(message=message, data=outcome, complete=outcome["complete"],
+                          warnings=outcome["warnings"])
+        return await run(check())
 
     @mcp.tool()
     async def bb_submit_assignment(course: str, assignment: str, file_path: str,

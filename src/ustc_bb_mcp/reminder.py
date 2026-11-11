@@ -89,6 +89,15 @@ def provider_info(address: str, config: dict | None = None) -> dict:
     return {"provider": name, **preset}
 
 
+def mask_address(address: str) -> str:
+    """Hide most of the local part: tool output may reach a remote model."""
+    if "@" not in address:
+        return address
+    local, domain = address.split("@", 1)
+    keep = local[:3]
+    return f"{keep}{'*' * max(1, len(local) - len(keep))}@{domain}"
+
+
 def mail_config(settings: Settings) -> dict:
     config = _read_config(settings)
     address = os.environ.get("BB_MAIL_USR", config.get("mail_address", "")).strip()
@@ -280,8 +289,13 @@ def digest_mail(new_items: list[dict], due_soon: list[dict]) -> tuple[str, str]:
     return subject, body
 
 
-async def check_once(settings: Settings, bb=None, *, send: bool = True) -> dict:
-    """Run one check: list assignments, compare with state, mail the digest."""
+async def check_once(settings: Settings, bb=None, *, send: bool = True,
+                     dry_run: bool = False) -> dict:
+    """Run one check: list assignments, compare with state, mail the digest.
+
+    ``dry_run`` reports what would be mailed without sending or advancing the
+    local state, so a preview never consumes a notification.
+    """
     if bb is None:
         from .auth import Session
         from .service import Blackboard
@@ -302,18 +316,19 @@ async def check_once(settings: Settings, bb=None, *, send: bool = True) -> dict:
     new_items, due_soon = outcome["new"], outcome["due_soon"]
     sent = False
     if new_items or due_soon:
-        if send:
+        if send and not dry_run:
             config = ensure_mail_configured(settings)
             subject, body = digest_mail(new_items, due_soon)
             send_mail(config, subject, body)
+        sent = send and not dry_run
+    if not dry_run:
         # Persist only after a successful send so a failure is retried next run.
-        save_state(settings, outcome["state"])
-        sent = send
-    else:
+        outcome["state"]["last_check"] = now.isoformat()
         save_state(settings, outcome["state"])
     return {"checked_at": now.isoformat(), "assignments_checked": len(items),
             "new_assignments": len(new_items), "due_soon": len(due_soon),
-            "mail_sent": sent, "complete": result.complete, "warnings": result.warnings}
+            "mail_sent": sent, "dry_run": dry_run, "complete": result.complete,
+            "warnings": result.warnings}
 
 
 async def run_reminder(settings: Settings, interval_minutes: float) -> None:

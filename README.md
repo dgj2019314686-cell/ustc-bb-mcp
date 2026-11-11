@@ -74,7 +74,7 @@ uv run ustc-bb-mcp login --browser
 
 服务的 stdout 仅用于 MCP 协议，日志写入 stderr。直接运行 `uv run ustc-bb-mcp serve` 后等待标准输入属于正常行为；交互式诊断请使用 `doctor`。
 
-## 9 个工具
+## 11 个工具
 
 | 工具 | 作用与参数 |
 |---|---|
@@ -86,6 +86,8 @@ uv run ustc-bb-mcp login --browser
 | `bb_list_assignments(course)` | 查询作业、测试入口、截止日期及可确认的状态；`course="all"` 查询全部课程 |
 | `bb_assignment_details(course, keyword="", download=True)` | 查询作业完整要求、附件、状态及可见成绩；默认会下载附件，设 `download=False` 可只查看 |
 | `bb_announcements(course, limit=8)` | 读取公告；`course="all"` 查询全部课程 |
+| `bb_reminder_status()` | 查看作业提醒状态：邮箱是否绑定、发信服务、追踪与已提醒数量、上次检查时间；只读，不发信 |
+| `bb_check_reminders(dry_run=False)` | 比对作业与本地记录，把新布置或 24 小时内截止的作业汇总成一封邮件发出；`dry_run=true` 只报告不发信 |
 | `bb_submit_assignment(course, assignment, file_path, comment="", confirm=False, preview_token="")` | 为单个标准文件作业生成提交预览，再凭预览令牌确认提交 |
 
 课程与作业支持准确 ID、完整名称或唯一名称关键词。命中多项时会返回候选，不会自动选择第一项；后续调用请使用准确 ID。
@@ -97,7 +99,7 @@ uv run ustc-bb-mcp login --browser
 - “下载电磁学课程最新的两份 PDF 课件。”
 - “读取所有课程最近的公告，整理与考试有关的信息。”
 
-公告总结由使用工具的 AI 客户端完成。MCP 工具本身不提供定时提醒、跨课程全文索引、教师批改或自动答题；可选的本机邮件提醒见下文「作业邮件提醒」。
+公告总结由使用工具的 AI 客户端完成。MCP 工具本身不含定时器、跨课程全文索引、教师批改或自动答题；在对话里可用 `bb_check_reminders` 触发一次提醒检查，真正的定时由可选的 `remind` 命令负责，详见下文「作业邮件提醒」。
 
 ### 如何理解查询结果
 
@@ -119,7 +121,10 @@ uv run ustc-bb-mcp login --browser
 
 ## 作业邮件提醒（可选）
 
-MCP 工具本身是按需调用的，不包含定时器。如需「新作业邮件通知 + 截止前 1 天提醒」，可以使用独立的 `remind` 命令。该功能**不是 agent**：它只是一个固定周期的检查循环，仅识别科目名称与截止日期，不做任何自主决策，也绝不代替用户提交作业。
+MCP 工具本身是按需调用的，不包含定时器。提醒功能分两层，共用同一套会话、配置和状态：
+
+- **在 AI 客户端里按需触发**：`bb_reminder_status` 查看绑定与进度，`bb_check_reminders` 立即比对并发信（`dry_run=true` 只预览）。绑定邮箱不通过工具参数传递，避免凭据进入对话上下文。
+- **定时执行**：`remind` 命令按固定周期运行，或 `remind --once` 交给系统计划任务。该功能**不是 agent**：它只是一个固定周期的检查循环，仅识别科目名称与截止日期，不做任何自主决策，也绝不代替用户提交作业。
 
 推荐用本机绑定页面（仅监听 127.0.0.1，凭据只进系统凭据库）：
 

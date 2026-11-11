@@ -64,6 +64,14 @@ wheel 与源码包已重新构建；没有执行远端发布。Windows/macOS/Lin
 - UI 离线测试覆盖：无令牌拒绝、状态接口返回服务商清单、绑定后凭据不出现在响应与 `config.json`、未知域名返回 400、跨站 Origin/伪造 Host 被拒、未绑定时测试邮件返回 `mail_not_configured`。
 - 已用真实科大邮箱完成一次端到端投递验证（见上节）；QQ 邮箱通道未用真实授权码实测，需用户生成授权码后在绑定页面发送测试邮件确认。
 
+## MCP 工具结合验证（同 PR 后续提交）
+
+- 新增两个 MCP 工具，与原有 9 个工具共用同一 `Session`/`Blackboard`/配置/状态：`bb_reminder_status`（只读状态）与 `bb_check_reminders(dry_run=false)`（触发一次比对并发送摘要邮件）。
+- 工具不接受密码参数，绑定的邮箱地址在工具返回值中做掩码（`dgj*********@mail.ustc.edu.cn`），避免地址与凭据进入模型上下文；`test_mcp.py` 断言返回值不含 `password`。
+- `check_once(dry_run=True)` 只报告、不发信、不推进 `reminder-state.json`，避免"预览"把提醒标记成已发送；状态新增 `last_check` 字段供状态工具展示。
+- 会话通过 `bb_login`/`login` 获取，工具本身不做登录，也不提交任何作业。
+- 离线测试：`test_mcp.py` 校验 11 个工具的清单与 `bb_reminder_status` 结构；`test_reminder.py` 新增 dry-run 不消耗通知、`last_check` 落盘、地址掩码三组用例。Ruff 通过。
+
 ## 尚未验证的分支
 
 - 真实作业上传和提交没有执行；本地模拟站测试不能替代真实提交验证。

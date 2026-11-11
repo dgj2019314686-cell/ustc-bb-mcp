@@ -14,6 +14,7 @@ TOOLS = {
     "bb_login", "bb_status", "bb_list_courses", "bb_list_course_files",
     "bb_download_courseware", "bb_list_assignments", "bb_assignment_details",
     "bb_announcements", "bb_submit_assignment",
+    "bb_reminder_status", "bb_check_reminders",
 }
 
 
@@ -36,6 +37,11 @@ async def test_handshake_schema_calls_and_structured_error(tmp_path):
             result = await client.call_tool(name)
             assert result.structured_content["ok"] is True
             assert result.structured_content["checked_at"]
+        reminder = await client.call_tool("bb_reminder_status")
+        assert reminder.structured_content["ok"] is True
+        assert reminder.structured_content["data"]["mail_configured"] is False
+        assert "setup_command" in reminder.structured_content["data"]
+        assert "password" not in str(reminder.structured_content["data"])
         result = await client.call_tool("bb_list_course_files", {"course": "missing"})
         assert result.structured_content["ok"] is False
         assert result.structured_content["error"]["code"] == "not_found"

@@ -282,3 +282,34 @@ def test_bind_mail_rejects_unknown_provider_and_empty_credential(monkeypatch, tm
     with pytest.raises(BBError) as error:
         reminder.bind_mail(settings(tmp_path), "123456789@qq.com", "  ")
     assert error.value.code == "invalid_config"
+
+
+async def test_check_once_dry_run_reports_without_sending_or_advancing(tmp_path, monkeypatch):
+    config = settings(tmp_path)
+    # A baseline already exists (the user has run a check before).
+    (tmp_path / "reminder-state.json").write_text(
+        json.dumps({"seen": {}, "notified": {}}), encoding="utf-8")
+    monkeypatch.setattr(smtplib, "SMTP_SSL", FakeSMTP)
+    FakeSMTP.calls = []
+    preview = await check_once(config, bb=FakeBB([item(assignment_id="a")]), dry_run=True)
+    assert preview["dry_run"] is True and preview["mail_sent"] is False
+    assert preview["new_assignments"] == 1
+    # A preview must not consume the notification or write state.
+    assert FakeSMTP.calls == []
+    stored = json.loads((tmp_path / "reminder-state.json").read_text(encoding="utf-8"))
+    assert stored["seen"] == {} and "last_check" not in stored
+
+
+async def test_check_once_records_last_check_time(tmp_path, monkeypatch):
+    config = settings(tmp_path)
+    monkeypatch.setenv("BB_MAIL_PWD", "pw")
+    monkeypatch.setenv("BB_MAIL_USR", "pb1234567@mail.ustc.edu.cn")
+    await check_once(config, bb=FakeBB([item(assignment_id="a")]))
+    stored = json.loads((tmp_path / "reminder-state.json").read_text(encoding="utf-8"))
+    assert stored["last_check"] and "_101_1:a" in stored["seen"]
+
+
+def test_mask_address_hides_local_part():
+    assert reminder.mask_address("dgj738506330@mail.ustc.edu.cn") == "dgj*********@mail.ustc.edu.cn"
+    assert reminder.mask_address("ab@qq.com") == "ab*@qq.com"
+    assert reminder.mask_address("") == ""
