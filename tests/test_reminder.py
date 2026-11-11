@@ -7,11 +7,13 @@ from types import SimpleNamespace
 
 import pytest
 
+import ustc_bb_mcp.reminder as reminder
 from ustc_bb_mcp.errors import BBError
 from ustc_bb_mcp.models import Result
 from ustc_bb_mcp.reminder import (
     check_once,
     digest_mail,
+    ensure_mail_configured,
     evaluate,
     load_state,
     mail_config,
@@ -107,7 +109,38 @@ def test_mail_config_prefers_environment(monkeypatch, tmp_path):
     mail = mail_config(config)
     assert mail["address"] == "pb1234567@mail.ustc.edu.cn"
     assert mail["password"] == "secret"
-    assert mail["host"] == "smtp.ustc.edu.cn" and mail["port"] == 465
+    assert mail["host"] == "mail.ustc.edu.cn" and mail["port"] == 465
+
+
+class FakeTTY:
+    def isatty(self):
+        return True
+
+
+def test_ensure_mail_configured_runs_wizard_only_on_tty(monkeypatch, tmp_path):
+    config = settings(tmp_path)
+    monkeypatch.delenv("BB_MAIL_USR", raising=False)
+    monkeypatch.delenv("BB_MAIL_PWD", raising=False)
+    calls = []
+
+    def fake_configure(target):
+        calls.append(target)
+        target.config_path.write_text(
+            json.dumps({"mail_address": "pb1234567@mail.ustc.edu.cn"}), encoding="utf-8")
+        monkeypatch.setenv("BB_MAIL_PWD", "pw")
+        return {}
+
+    monkeypatch.setattr(reminder, "configure_mail", fake_configure)
+    # Non-interactive (cron, MCP): fail with guidance instead of hanging.
+    with pytest.raises(BBError) as error:
+        ensure_mail_configured(config)
+    assert error.value.code == "mail_not_configured"
+    assert calls == []
+    # Interactive first run: the wizard runs once and the settings are reused.
+    monkeypatch.setattr(reminder.sys, "stdin", FakeTTY())
+    mail = ensure_mail_configured(config)
+    assert calls == [config]
+    assert mail["address"] == "pb1234567@mail.ustc.edu.cn" and mail["password"] == "pw"
 
 
 class FakeSMTP:

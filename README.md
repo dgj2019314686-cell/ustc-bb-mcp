@@ -121,13 +121,17 @@ uv run ustc-bb-mcp login --browser
 
 MCP 工具本身是按需调用的，不包含定时器。如需「新作业邮件通知 + 截止前 1 天提醒」，可以使用独立的 `remind` 命令。该功能**不是 agent**：它只是一个固定周期的检查循环，仅识别科目名称与截止日期，不做任何自主决策，也绝不代替用户提交作业。
 
-配置科大邮箱（[mail.ustc.edu.cn](https://mail.ustc.edu.cn/) 的同一账号，通过学校 SMTP 服务器发送）：
+配置科大邮箱（[mail.ustc.edu.cn](https://mail.ustc.edu.cn/) 的同一账号，通过学校 SMTP 服务器 `mail.ustc.edu.cn:465` 发送）：
 
 ```
 uv run ustc-bb-mcp mail-configure
 ```
 
-邮箱密码保存到系统凭据库（与登录密码分开存储）；如学校要求客户端专用密码或授权码，请填写对应凭据。也可通过环境变量提供：`BB_MAIL_USR`（邮箱地址）、`BB_MAIL_PWD`（密码）、`BB_SMTP_HOST`（默认 `smtp.ustc.edu.cn`）、`BB_SMTP_PORT`（默认 465，SSL）。
+Blackboard 与邮箱是两套互不连通的系统，因此首次使用一定没有邮箱配置。直接运行 `remind` 时，如果在交互式终端里检测到未绑定，会自动进入一次绑定引导；非交互环境（cron、MCP）则返回 `mail_not_configured` 并提示手动执行 `mail-configure`，不会挂起等待输入。
+
+**密码必须使用「客户端专用密码」**，不是统一身份认证密码：登录 mail.ustc.edu.cn → 左下角「设置」→「安全设置」→「客户端专用密码」→「生成专用密码」，得到 16 位密码（最多可生成 6 个，可随时撤销，不影响网页登录密码）。这是学校官方文档中第三方客户端唯一的鉴权方式；学校邮箱未向个人开放 OAuth 授权发信，网页登录走的是统一身份认证，无法用于 SMTP。
+
+邮箱密码保存到系统凭据库（与登录密码分开存储）；也可通过环境变量提供：`BB_MAIL_USR`（邮箱地址）、`BB_MAIL_PWD`（客户端专用密码）、`BB_SMTP_HOST`（默认 `mail.ustc.edu.cn`，`smtp.ustc.edu.cn` 亦可）、`BB_SMTP_PORT`（默认 465，SSL）。
 
 启动定时检查（默认每 60 分钟一次）：
 
@@ -170,9 +174,9 @@ uv run ustc-bb-mcp remind --once
 | 查询显示 `unknown` 或 `complete=false` | 根据返回的失败信息检查原始页面；不要据此认定作业已提交或不存在 |
 | 提交预览令牌过期或内容不匹配 | 重新生成预览并确认，不能复用旧令牌 |
 | 提交后结果待确认 | 打开 BB 提交历史核验回执与附件，不自动重复提交 |
-| `remind` 提示 `mail_not_configured` | 运行 `mail-configure`，或设置 `BB_MAIL_USR`/`BB_MAIL_PWD` |
-| `remind` 提示 `mail_send_failed` | 检查 `smtp.ustc.edu.cn` 是否可达、密码是否为客户端专用密码、是否需要校园网环境 |
-| 首次运行 `remind` 没有收到邮件 | 正常行为：首次运行只记录基线，之后的检查才会报告新作业 |
+| `remind` 提示 `mail_not_configured` | 在终端直接运行 `remind` 会自动进入绑定引导；非交互环境请先运行 `mail-configure`，或设置 `BB_MAIL_USR`/`BB_MAIL_PWD` |
+| `remind` 提示 `mail_send_failed` | 检查 `mail.ustc.edu.cn:465` 是否可达、是否用了客户端专用密码（统一身份认证密码无效）、是否需要校园网环境 |
+| 首次运行 `remind` 没有收到邮件 | 正常行为：首次运行只记录基线，之后的检查才会报告新作业；若这次包含了绑定引导，绑定成功也不补发历史作业 |
 
 ## 开发与验证
 

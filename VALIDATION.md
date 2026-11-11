@@ -52,8 +52,9 @@ wheel 与源码包已重新构建；没有执行远端发布。Windows/macOS/Lin
 
 - 新增离线测试覆盖：基线记录不发信、新作业识别、24 小时截止提醒与同一截止时间去重、截止时间变更再提醒、已提交/已评分/无截止日期跳过、SMTP SSL 连接参数与收件人、发送失败包装为 `mail_send_failed`、`check_once` 状态持久化、未配置邮箱时返回 `mail_not_configured`。全部离线运行，不访问学校网站、不连接真实 SMTP、不发送真实邮件。
 - Ruff 检查通过。
-- 默认 SMTP 服务器为 `smtp.ustc.edu.cn`（SSL 465），与科大网页邮箱 mail.ustc.edu.cn 同一账号体系；可在 `config.json` 或 `BB_SMTP_HOST`/`BB_SMTP_PORT` 覆盖。
-- 未使用真实邮箱凭据执行过实际发送；真实发送验证需要用户提供邮箱凭据后运行 `remind --once` 并检查收件箱。
+- 默认 SMTP 服务器为 `mail.ustc.edu.cn`（SSL 465，与学校官方客户端设置文档一致），`smtp.ustc.edu.cn` 同样可用；可用 `BB_SMTP_HOST`/`BB_SMTP_PORT` 覆盖。
+- 已用真实账号做过一次投递验证：`smtp.ustc.edu.cn:465` 与 `mail.ustc.edu.cn:465` 均能用客户端专用密码完成 SMTP AUTH，其中一封测试邮件成功投递并在收件箱确认收到。凭据仅通过进程环境变量传入，未写入仓库、配置文件或日志。
+- 学校邮箱不接受统一身份认证密码用于 SMTP，官方第三方客户端方案只有「客户端专用密码」（16 位、可撤销、最多 6 个）；未向个人开放 OAuth 授权发信，因此本项目不实现网页授权流程。
 
 ## 尚未验证的分支
 

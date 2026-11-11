@@ -2,8 +2,11 @@
 
 The reminder is deliberately a fixed periodic check, not an agent: it lists
 assignments, recognises only the course name and the due date, and sends a
-digest e-mail through the user's USTC mailbox (smtp.ustc.edu.cn). It never
-decides anything on the user's behalf and never submits coursework.
+digest e-mail through the user's USTC mailbox (mail.ustc.edu.cn:465, SSL).
+USTC mail does not accept the CAS login password for SMTP; the official
+client setup requires a 16-character client-specific password, which can be
+generated and revoked at mail.ustc.edu.cn under 设置 → 安全设置 → 客户端专用密码.
+It never decides anything on the user's behalf and never submits coursework.
 """
 
 from __future__ import annotations
@@ -22,7 +25,7 @@ import keyring
 from .config import KEYRING_SERVICE, Settings, private_json
 from .errors import BBError
 
-SMTP_HOST = "smtp.ustc.edu.cn"
+SMTP_HOST = "mail.ustc.edu.cn"
 SMTP_PORT = 465
 STATE_FILE = "reminder-state.json"
 DUE_WINDOW = timedelta(hours=24)
@@ -62,7 +65,10 @@ def configure_mail(settings: Settings) -> dict:
     address = input("科大邮箱地址（例如 pb1234567@mail.ustc.edu.cn）: ").strip()
     if not address.endswith("@ustc.edu.cn"):
         raise BBError("invalid_config", "请使用科大邮箱地址（@ustc.edu.cn 或 @mail.ustc.edu.cn）。")
-    password = getpass.getpass("邮箱 SMTP 密码（隐藏输入，如学校提供客户端专用密码请填写该密码）: ")
+    password = getpass.getpass(
+        "客户端专用密码（16 位；mail.ustc.edu.cn → 设置 → 安全设置 → 客户端专用密码 生成，"
+        "统一身份认证密码不能用于 SMTP）: "
+    )
     if not password:
         raise BBError("invalid_config", "密码不能为空。")
     try:
@@ -74,6 +80,31 @@ def configure_mail(settings: Settings) -> dict:
     private_json(settings.config_path, config)
     return {"configured": True, "mail_address": address, "smtp_host": SMTP_HOST,
             "password_storage": "system_keyring"}
+
+
+def ensure_mail_configured(settings: Settings) -> dict:
+    """Return usable mail settings; on first interactive use, run the wizard.
+
+    Blackboard and the mailbox are separate systems, so a first-time user has
+    no mail settings yet. In an interactive terminal the reminder binds the
+    mailbox once instead of failing; non-interactive callers (cron, MCP) still
+    get a clear error instead of a hung prompt.
+    """
+    config = mail_config(settings)
+    if config["address"] and config["password"]:
+        return config
+    if not sys.stdin.isatty():
+        raise BBError(
+            "mail_not_configured",
+            "尚未绑定邮箱。请运行 ustc-bb-mcp mail-configure，或设置 BB_MAIL_USR/BB_MAIL_PWD。",
+        )
+    print("首次使用需要绑定科大邮箱（Blackboard 与邮箱是两套系统，只需绑定一次）。", file=sys.stderr)
+    print("请填写 mail.ustc.edu.cn 生成的客户端专用密码，统一身份认证密码无法用于 SMTP。", file=sys.stderr)
+    configure_mail(settings)
+    config = mail_config(settings)
+    if not config["address"] or not config["password"]:
+        raise BBError("mail_not_configured", "邮箱绑定未完成，请重新运行 ustc-bb-mcp mail-configure。")
+    return config
 
 
 def send_mail(config: dict, subject: str, body: str) -> None:
@@ -198,10 +229,7 @@ async def check_once(settings: Settings, bb=None, *, send: bool = True) -> dict:
     sent = False
     if new_items or due_soon:
         if send:
-            config = mail_config(settings)
-            if not config["address"] or not config["password"]:
-                raise BBError("mail_not_configured",
-                              "尚未配置邮箱。请运行 ustc-bb-mcp mail-configure，或设置 BB_MAIL_USR/BB_MAIL_PWD。")
+            config = ensure_mail_configured(settings)
             subject, body = digest_mail(new_items, due_soon)
             send_mail(config, subject, body)
         # Persist only after a successful send so a failure is retried next run.
