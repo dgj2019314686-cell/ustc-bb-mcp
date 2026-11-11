@@ -33,7 +33,10 @@ def main() -> int:
     commands.add_parser("serve", help="启动 stdio MCP 服务")
     config_parser = commands.add_parser("configure", help="将密码存入系统凭据库")
     config_parser.add_argument("--username")
-    commands.add_parser("mail-configure", help="保存科大邮箱 SMTP 凭据到系统凭据库")
+    commands.add_parser("mail-configure", help="在终端里绑定发信邮箱（科大邮箱或 QQ 邮箱）")
+    ui_parser = commands.add_parser("ui", help="启动本机邮箱绑定页面（仅监听 127.0.0.1）")
+    ui_parser.add_argument("--port", type=int, default=0, help="监听端口，默认随机可用端口")
+    ui_parser.add_argument("--no-open", action="store_true", help="不自动打开浏览器")
     remind_parser = commands.add_parser("remind", help="定时检查作业并通过科大邮箱提醒（无 agent）")
     remind_parser.add_argument("--interval", type=float, default=60, help="检查间隔（分钟），默认 60")
     remind_parser.add_argument("--once", action="store_true", help="只检查一次，适合系统定时任务")
@@ -58,6 +61,9 @@ def main() -> int:
         elif args.command == "mail-configure":
             from .reminder import configure_mail
             result = configure_mail(settings)
+        elif args.command == "ui":
+            from .ui import serve
+            result = serve(settings, port=args.port, open_browser=not args.no_open)
         elif args.command == "remind":
             from .reminder import check_once, run_reminder
 

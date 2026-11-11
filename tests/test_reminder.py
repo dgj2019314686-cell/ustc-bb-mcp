@@ -222,3 +222,63 @@ async def test_check_once_without_mail_config_raises(tmp_path, monkeypatch):
     with pytest.raises(BBError) as error:
         await check_once(config, bb=FakeBB([item()]))
     assert error.value.code == "mail_not_configured"
+
+
+def test_detect_provider_maps_known_domains():
+    assert reminder.detect_provider("pb1234567@mail.ustc.edu.cn") == "ustc"
+    assert reminder.detect_provider("student@ustc.edu.cn") == "ustc"
+    assert reminder.detect_provider("123456789@qq.com") == "qq"
+    assert reminder.detect_provider("someone@foxmail.com") == "qq"
+    assert reminder.detect_provider("nobody@example.com") == "custom"
+    assert reminder.detect_provider("not-an-address") == "custom"
+
+
+def test_mail_config_uses_qq_smtp_for_qq_address(monkeypatch, tmp_path):
+    monkeypatch.setenv("BB_MAIL_USR", "123456789@qq.com")
+    monkeypatch.setenv("BB_MAIL_PWD", "auth-code")
+    mail = mail_config(settings(tmp_path))
+    assert mail["provider"] == "qq" and mail["label"] == "QQ 邮箱"
+    assert mail["host"] == "smtp.qq.com" and mail["port"] == 465
+    assert mail["credential"] == "授权码"
+
+
+def test_mail_config_explicit_host_beats_provider_default(monkeypatch, tmp_path):
+    monkeypatch.setenv("BB_MAIL_USR", "123456789@qq.com")
+    monkeypatch.setenv("BB_SMTP_HOST", "127.0.0.1")
+    monkeypatch.setenv("BB_SMTP_PORT", "2525")
+    mail = mail_config(settings(tmp_path))
+    assert mail["host"] == "127.0.0.1" and mail["port"] == 2525
+
+
+class Backend:
+    def __init__(self):
+        self.stored = {}
+
+    def set_password(self, service, account, password):
+        self.stored[(service, account)] = password
+
+
+def test_bind_mail_stores_credential_in_keyring_only(monkeypatch, tmp_path):
+    from ustc_bb_mcp import config as config_module
+
+    backend = Backend()
+    monkeypatch.setattr(config_module, "_secure_keyring", lambda: backend)
+    result = reminder.bind_mail(settings(tmp_path), " 123456789@qq.com ", "auth-code")
+    assert result["configured"] is True and result["provider"] == "qq"
+    assert result["smtp_host"] == "smtp.qq.com"
+    assert "password" not in result and "auth-code" not in json.dumps(result)
+    stored = json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))
+    assert stored["mail_address"] == "123456789@qq.com" and stored["mail_provider"] == "qq"
+    assert "auth-code" not in json.dumps(stored)
+
+
+def test_bind_mail_rejects_unknown_provider_and_empty_credential(monkeypatch, tmp_path):
+    from ustc_bb_mcp import config as config_module
+
+    monkeypatch.setattr(config_module, "_secure_keyring", lambda: Backend())
+    with pytest.raises(BBError) as error:
+        reminder.bind_mail(settings(tmp_path), "nobody@example.com", "x")
+    assert error.value.code == "invalid_config"
+    with pytest.raises(BBError) as error:
+        reminder.bind_mail(settings(tmp_path), "123456789@qq.com", "  ")
+    assert error.value.code == "invalid_config"

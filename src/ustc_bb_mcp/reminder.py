@@ -2,10 +2,12 @@
 
 The reminder is deliberately a fixed periodic check, not an agent: it lists
 assignments, recognises only the course name and the due date, and sends a
-digest e-mail through the user's USTC mailbox (mail.ustc.edu.cn:465, SSL).
-USTC mail does not accept the CAS login password for SMTP; the official
-client setup requires a 16-character client-specific password, which can be
-generated and revoked at mail.ustc.edu.cn under 设置 → 安全设置 → 客户端专用密码.
+digest e-mail through the user's own mailbox. Two sending services are built in:
+USTC mail (mail.ustc.edu.cn:465, SSL) and QQ mail (smtp.qq.com:465, SSL); the
+service is chosen automatically from the address, and any other SMTP host can be
+supplied through BB_SMTP_HOST. Neither provider accepts the normal web login
+password for SMTP, so the reminder stores only the revocable app credential
+(USTC: 16-character client-specific password, QQ: 授权码).
 It never decides anything on the user's behalf and never submits coursework.
 """
 
@@ -31,6 +33,30 @@ STATE_FILE = "reminder-state.json"
 DUE_WINDOW = timedelta(hours=24)
 STATUS_LABELS = {"not_submitted": "未提交", "draft": "草稿", "unknown": "未知"}
 
+# Supported sending services. Both use an app-specific credential rather than the
+# account's web login password: USTC mails need a 16-character client-specific
+# password, QQ mail needs an authorisation code (授权码). Neither provider accepts
+# the normal sign-in password for SMTP, so the reminder only ever stores the
+# revocable credential.
+PROVIDERS = {
+    "ustc": {
+        "label": "科大邮箱",
+        "host": "mail.ustc.edu.cn",
+        "port": 465,
+        "domains": ("ustc.edu.cn",),
+        "credential": "客户端专用密码",
+        "hint": "mail.ustc.edu.cn → 设置 → 安全设置 → 客户端专用密码（16 位，可随时撤销）",
+    },
+    "qq": {
+        "label": "QQ 邮箱",
+        "host": "smtp.qq.com",
+        "port": 465,
+        "domains": ("qq.com", "foxmail.com"),
+        "credential": "授权码",
+        "hint": "QQ 邮箱网页版 → 设置 → 账号 → 开启「POP3/SMTP 服务」→ 生成授权码",
+    },
+}
+
 
 def _read_config(settings: Settings) -> dict:
     try:
@@ -40,12 +66,37 @@ def _read_config(settings: Settings) -> dict:
         return {}
 
 
+def detect_provider(address: str) -> str:
+    """Map a mail address to a known provider key, or "custom" when unknown."""
+    domain = address.rsplit("@", 1)[-1].strip().lower()
+    if "@" not in address:
+        return "custom"
+    for name, preset in PROVIDERS.items():
+        if any(domain == suffix or domain.endswith("." + suffix) for suffix in preset["domains"]):
+            return name
+    return "custom"
+
+
+def provider_info(address: str, config: dict | None = None) -> dict:
+    """Describe the sending service for an address: label, host, port, hint."""
+    config = config or {}
+    name = config.get("mail_provider") or detect_provider(address)
+    preset = PROVIDERS.get(name)
+    if preset is None:
+        domain = address.rsplit("@", 1)[-1] if "@" in address else "自定义 SMTP"
+        return {"provider": "custom", "label": domain or "自定义 SMTP", "host": SMTP_HOST,
+                "port": SMTP_PORT, "credential": "密码或授权码", "hint": ""}
+    return {"provider": name, **preset}
+
+
 def mail_config(settings: Settings) -> dict:
     config = _read_config(settings)
     address = os.environ.get("BB_MAIL_USR", config.get("mail_address", "")).strip()
-    host = os.environ.get("BB_SMTP_HOST", config.get("smtp_host", SMTP_HOST))
+    preset = provider_info(address, config)
+    host = os.environ.get("BB_SMTP_HOST") or config.get("smtp_host") or preset["host"]
+    raw_port = os.environ.get("BB_SMTP_PORT") or config.get("smtp_port") or preset["port"]
     try:
-        port = int(os.environ.get("BB_SMTP_PORT", config.get("smtp_port", SMTP_PORT)))
+        port = int(raw_port)
     except ValueError as exc:
         raise BBError("invalid_config", "SMTP 端口必须是整数。") from exc
     password = os.environ.get("BB_MAIL_PWD", "")
@@ -54,32 +105,54 @@ def mail_config(settings: Settings) -> dict:
             password = keyring.get_password(KEYRING_SERVICE, f"mail:{address}") or ""
         except Exception:
             password = ""
-    return {"address": address, "password": password, "host": host, "port": port}
+    return {"address": address, "password": password, "host": host, "port": port,
+            "provider": preset["provider"], "label": preset["label"],
+            "credential": preset["credential"], "hint": preset["hint"]}
+
+
+def bind_mail(settings: Settings, address: str, password: str) -> dict:
+    """Store an address + app credential in the keyring and remember the address.
+
+    Shared by the CLI wizard and the local setup UI; the credential is never
+    written to config.json and never returned to the caller.
+    """
+    from .config import _secure_keyring
+
+    address = (address or "").strip()
+    if "@" not in address or not address.rsplit("@", 1)[-1]:
+        raise BBError("invalid_config", "请填写完整的邮箱地址。")
+    provider = detect_provider(address)
+    if provider == "custom":
+        labels = "、".join(preset["label"] for preset in PROVIDERS.values())
+        raise BBError("invalid_config",
+                      f"目前支持 {labels}；其它邮箱请用 BB_SMTP_HOST/BB_MAIL_USR/BB_MAIL_PWD 环境变量。")
+    if not (password or "").strip():
+        raise BBError("invalid_config", "密码不能为空。")
+    try:
+        _secure_keyring().set_password(KEYRING_SERVICE, f"mail:{address}", password.strip())
+    except Exception as exc:
+        raise BBError("credential_store_unavailable", "无法写入系统凭据库；未保存明文密码。") from exc
+    config = _read_config(settings)
+    config["mail_address"] = address
+    config["mail_provider"] = provider
+    private_json(settings.config_path, config)
+    preset = PROVIDERS[provider]
+    return {"configured": True, "mail_address": address, "provider": provider,
+            "label": preset["label"], "smtp_host": preset["host"], "smtp_port": preset["port"],
+            "password_storage": "system_keyring"}
 
 
 def configure_mail(settings: Settings) -> dict:
     from getpass import getpass
 
-    from .config import _secure_keyring
-
-    address = input("科大邮箱地址（例如 pb1234567@mail.ustc.edu.cn）: ").strip()
-    if not address.endswith("@ustc.edu.cn"):
-        raise BBError("invalid_config", "请使用科大邮箱地址（@ustc.edu.cn 或 @mail.ustc.edu.cn）。")
-    password = getpass.getpass(
-        "客户端专用密码（16 位；mail.ustc.edu.cn → 设置 → 安全设置 → 客户端专用密码 生成，"
-        "统一身份认证密码不能用于 SMTP）: "
-    )
-    if not password:
-        raise BBError("invalid_config", "密码不能为空。")
-    try:
-        _secure_keyring().set_password(KEYRING_SERVICE, f"mail:{address}", password)
-    except Exception as exc:
-        raise BBError("credential_store_unavailable", "无法写入系统凭据库；未保存明文密码。") from exc
-    config = _read_config(settings)
-    config["mail_address"] = address
-    private_json(settings.config_path, config)
-    return {"configured": True, "mail_address": address, "smtp_host": SMTP_HOST,
-            "password_storage": "system_keyring"}
+    address = input("邮箱地址（科大 xxx@mail.ustc.edu.cn 或 QQ xxx@qq.com）: ").strip()
+    provider = detect_provider(address)
+    if provider == "custom":
+        labels = "、".join(preset["label"] for preset in PROVIDERS.values())
+        raise BBError("invalid_config", f"目前支持 {labels}。")
+    preset = PROVIDERS[provider]
+    password = getpass.getpass(f"{preset['credential']}（{preset['hint']}）: ")
+    return bind_mail(settings, address, password)
 
 
 def ensure_mail_configured(settings: Settings) -> dict:
@@ -98,8 +171,9 @@ def ensure_mail_configured(settings: Settings) -> dict:
             "mail_not_configured",
             "尚未绑定邮箱。请运行 ustc-bb-mcp mail-configure，或设置 BB_MAIL_USR/BB_MAIL_PWD。",
         )
-    print("首次使用需要绑定科大邮箱（Blackboard 与邮箱是两套系统，只需绑定一次）。", file=sys.stderr)
-    print("请填写 mail.ustc.edu.cn 生成的客户端专用密码，统一身份认证密码无法用于 SMTP。", file=sys.stderr)
+    print("首次使用需要绑定一个发信邮箱（Blackboard 与邮箱是两套系统，只需绑定一次）。", file=sys.stderr)
+    print("支持科大邮箱（客户端专用密码）与 QQ 邮箱（授权码）；网页登录密码无法用于 SMTP。",
+          file=sys.stderr)
     configure_mail(settings)
     config = mail_config(settings)
     if not config["address"] or not config["password"]:
