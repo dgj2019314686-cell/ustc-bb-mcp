@@ -467,15 +467,41 @@ class Session:
                 continue
             raise BBError("session_expired", "BB 会话失效，请重新登录后下载。")
 
-    async def login_browser(self) -> dict:
+    async def _browser_context(self, playwright, channel: str | None):
+        """Open the login window, preferring an installed browser over a download.
+
+        Playwright's bundled Chromium is a separate ~150 MB download, so when it
+        is missing we fall back to an already installed Edge or Chrome. Each
+        channel gets its own profile directory: Chromium and Edge cannot share
+        one user-data-dir safely.
+        """
+        profile = self.settings.profile_dir
+        if channel:
+            profile = profile.with_name(f"{profile.name}-{channel}")
+        profile.mkdir(parents=True, exist_ok=True, mode=0o700)
+        candidates = [channel] if channel else [None, "msedge", "chrome"]
+        last_error: Exception | None = None
+        for candidate in candidates:
+            options = {"headless": False, "locale": "zh-CN", "service_workers": "block"}
+            if candidate:
+                options["channel"] = candidate
+            try:
+                return await playwright.chromium.launch_persistent_context(str(profile), **options)
+            except Exception as exc:  # missing channel or missing bundled browser
+                last_error = exc
+        raise BBError(
+            "browser_unavailable",
+            "未找到可用的浏览器。请运行 playwright install chromium，"
+            "或用 login --browser --channel msedge（或 chrome）使用已安装的浏览器。",
+        ) from last_error
+
+    async def login_browser(self, channel: str | None = None) -> dict:
         from playwright.async_api import async_playwright
 
         self.settings.profile_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         try:
             async with async_playwright() as playwright:
-                context = await playwright.chromium.launch_persistent_context(
-                    str(self.settings.profile_dir), headless=False, locale="zh-CN", service_workers="block"
-                )
+                context = await self._browser_context(playwright, channel)
                 try:
                     await context.route("**/*", _browser_route)
                     state = await self.storage_state()
@@ -506,7 +532,12 @@ class Session:
         except BBError:
             raise
         except Exception as exc:
-            raise BBError("browser_login_failed", "浏览器登录无法完成。请先运行 playwright install chromium，并关闭本项目已有的登录窗口，再重试 login --browser。") from exc
+            raise BBError(
+                "browser_login_failed",
+                "浏览器登录无法完成。请先运行 playwright install chromium，"
+                "或用 login --browser --channel msedge 使用已安装的浏览器；"
+                "并关闭本项目已有的登录窗口后重试。",
+            ) from exc
 
     async def close(self) -> None:
         if self._owns_client:

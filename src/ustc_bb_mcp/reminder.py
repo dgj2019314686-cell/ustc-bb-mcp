@@ -31,6 +31,11 @@ SMTP_HOST = "mail.ustc.edu.cn"
 SMTP_PORT = 465
 STATE_FILE = "reminder-state.json"
 DUE_WINDOW = timedelta(hours=24)
+# The course content list page carries no deadline, so a deadline has to be read
+# from each assignment page. Cache those reads: deadlines rarely change, and a
+# periodic check should not re-open dozens of pages every hour.
+DUE_CACHE_TTL = timedelta(hours=6)
+DUE_FETCH_LIMIT = 60
 STATUS_LABELS = {"not_submitted": "未提交", "draft": "草稿", "unknown": "未知"}
 
 # Supported sending services. Both use an app-specific credential rather than the
@@ -254,9 +259,13 @@ def evaluate(items: list[dict], state: dict, now: datetime, *, bootstrap: bool =
             continue
         if notified.get(key) == item["due_at"]:
             continue
+        if bootstrap:
+            # The baseline records what already exists so historical items are
+            # not announced, but it must not consume an upcoming deadline:
+            # otherwise the first run silently cancels the 24-hour reminder.
+            continue
         notified[key] = item["due_at"]
-        if not bootstrap:
-            due_soon.append(item)
+        due_soon.append(item)
     return {"new": new_items, "due_soon": due_soon,
             "state": {"seen": seen, "notified": notified}}
 
@@ -289,8 +298,53 @@ def digest_mail(new_items: list[dict], due_soon: list[dict]) -> tuple[str, str]:
     return subject, body
 
 
+def _due_key(item: dict) -> str:
+    return f"{item.get('course_id', '')}:{item.get('id', '')}"
+
+
+async def _fill_due_dates(items: list[dict], bb, state: dict, now: datetime) -> list[str]:
+    """Attach deadlines to assignment items, reading detail pages when needed.
+
+    Deadlines exist only on the assignment page, never in the course list, so a
+    reminder that skipped this step would never see a 24-hour deadline. Results
+    are cached in the state file with a TTL; submitted items and tests are never
+    opened (opening a test page could start an attempt).
+    """
+    cache = state.setdefault("due_cache", {})
+    if not isinstance(cache, dict):
+        cache = state["due_cache"] = {}
+    pending: list[dict] = []
+    for item in items:
+        key = _due_key(item)
+        cached = cache.get(key)
+        if isinstance(cached, dict) and cached.get("due_at"):
+            age = now - (_due_datetime(cached.get("fetched_at")) or now - DUE_CACHE_TTL - timedelta(seconds=1))
+            if age < DUE_CACHE_TTL:
+                item["due_at"] = cached["due_at"]
+                item["due_text"] = cached.get("due_text") or item.get("due_text")
+                continue
+        if item.get("due_at") or item.get("kind") == "test":
+            continue
+        if item.get("status") in {"submitted", "graded"}:
+            continue
+        pending.append(item)
+    if not pending:
+        return []
+    if not hasattr(bb, "due_dates"):
+        return []
+    fetched, warnings = await bb.due_dates(pending[:DUE_FETCH_LIMIT])
+    for item in pending[:DUE_FETCH_LIMIT]:
+        found = fetched.get(_due_key(item))
+        if not found:
+            continue
+        item["due_at"] = found["due_at"]
+        item["due_text"] = found.get("due_text") or item.get("due_text")
+        cache[_due_key(item)] = {**found, "fetched_at": now.isoformat()}
+    return warnings
+
+
 async def check_once(settings: Settings, bb=None, *, send: bool = True,
-                     dry_run: bool = False) -> dict:
+                     dry_run: bool = False, fill_due: bool = True) -> dict:
     """Run one check: list assignments, compare with state, mail the digest.
 
     ``dry_run`` reports what would be mailed without sending or advancing the
@@ -312,6 +366,9 @@ async def check_once(settings: Settings, bb=None, *, send: bool = True,
     now = datetime.now(UTC)
     state_path = settings.data_dir / STATE_FILE
     state = load_state(settings)
+    warnings = list(result.warnings)
+    if fill_due and os.environ.get("BB_DUE_FETCH", "1") != "0":
+        warnings.extend(await _fill_due_dates(items, bb, state, now))
     outcome = evaluate(items, state, now, bootstrap=not state_path.exists())
     new_items, due_soon = outcome["new"], outcome["due_soon"]
     sent = False
@@ -323,12 +380,13 @@ async def check_once(settings: Settings, bb=None, *, send: bool = True,
         sent = send and not dry_run
     if not dry_run:
         # Persist only after a successful send so a failure is retried next run.
-        outcome["state"]["last_check"] = now.isoformat()
-        save_state(settings, outcome["state"])
+        merged = {**state, **outcome["state"]}
+        merged["last_check"] = now.isoformat()
+        save_state(settings, merged)
     return {"checked_at": now.isoformat(), "assignments_checked": len(items),
             "new_assignments": len(new_items), "due_soon": len(due_soon),
             "mail_sent": sent, "dry_run": dry_run, "complete": result.complete,
-            "warnings": result.warnings}
+            "warnings": warnings}
 
 
 async def run_reminder(settings: Settings, interval_minutes: float) -> None:

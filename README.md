@@ -35,7 +35,8 @@ uv run ustc-bb-mcp configure
 如果学校要求验证码、二次认证，或系统凭据库不可用，执行：
 
 ```powershell
-uv run ustc-bb-mcp login --browser
+uv run ustc-bb-mcp login --browser            # 默认用 playwright 自带 Chromium
+uv run ustc-bb-mcp login --browser --channel msedge   # 没有 Chromium 时用已装的 Edge/Chrome
 ```
 
 在打开的独立浏览器中完成学校认证，等待命令确认登录成功。这里使用项目专用的浏览器配置，不读取日常 Chrome、Edge 的会话。只使用浏览器登录也可以运行查询和提交工具；会话失效后需要再次执行此命令。
@@ -168,6 +169,7 @@ uv run ustc-bb-mcp remind --once
 行为说明：
 
 - 每次检查拉取全部课程的作业，与本地状态对比后，把「新布置的作业」和「24 小时内截止且未提交的作业」合并成一封摘要邮件发到你绑定的邮箱。
+- 课程列表页本身**不含截止日期**，只有作业详情页有，所以检查时会按需打开未提交作业的详情页读取日期（并发 6，实测 10 条约 0.8 秒），结果按 6 小时缓存写进 `reminder-state.json`；已提交作业和测试不打开（打开测试页可能消耗作答次数）。`BB_DUE_FETCH=0` 可关闭该补全。
 - 首次运行只记录基线、不发邮件，避免把已有作业全部当作新作业。
 - 同一作业的同一截止时间只提醒一次；截止时间变更后会再次提醒。
 - 状态为已提交或已评分的作业不会提醒；没有明确截止日期的作业不会触发截止提醒。

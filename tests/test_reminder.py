@@ -206,7 +206,9 @@ async def test_check_once_sends_digest_and_persists_state(tmp_path, monkeypatch)
     # A new assignment appears and is due soon: one digest mail is sent.
     second = await check_once(config, bb=FakeBB([
         item(assignment_id="a"), item(assignment_id="b", status="draft")]))
-    assert second["new_assignments"] == 1 and second["due_soon"] == 1
+    # "b" is new, and both items are due within 24 hours: the baseline no longer
+    # consumes "a"'s upcoming deadline, so both are reminded.
+    assert second["new_assignments"] == 1 and second["due_soon"] == 2
     assert second["mail_sent"] is True
     assert "作业提醒" in FakeSMTP.calls[0]["subject"]
     stored = json.loads((tmp_path / "reminder-state.json").read_text(encoding="utf-8"))
@@ -313,3 +315,67 @@ def test_mask_address_hides_local_part():
     assert reminder.mask_address("dgj738506330@mail.ustc.edu.cn") == "dgj*********@mail.ustc.edu.cn"
     assert reminder.mask_address("ab@qq.com") == "ab*@qq.com"
     assert reminder.mask_address("") == ""
+
+
+class FakeDueBB(FakeBB):
+    """Reports assignments whose deadlines only exist on the detail page."""
+
+    def __init__(self, items, due):
+        super().__init__(items)
+        self.due = due
+        self.due_calls = []
+
+    async def due_dates(self, items):
+        self.due_calls.append([f"{i['course_id']}:{i['id']}" for i in items])
+        return {f"{i['course_id']}:{i['id']}": v for i, v in
+                ((i, self.due.get(f"{i['course_id']}:{i['id']}")) for i in items) if v}, []
+
+
+async def test_check_once_reads_deadlines_from_detail_pages_and_caches(tmp_path, monkeypatch):
+    config = settings(tmp_path)
+    monkeypatch.setenv("BB_MAIL_USR", "pb1234567@mail.ustc.edu.cn")
+    monkeypatch.setenv("BB_MAIL_PWD", "pw")
+    monkeypatch.setattr(smtplib, "SMTP_SSL", FakeSMTP)
+    FakeSMTP.calls = []
+    soon = (datetime.now(UTC) + timedelta(hours=6)).isoformat()
+    bb = FakeDueBB([item(assignment_id="x", due_at=None)],
+                   {"_101_1:x": {"due_at": soon, "due_text": "明天 12:00"}})
+    # Baseline run records state; the deadline is resolved during this pass.
+    first = await check_once(config, bb=bb)
+    assert first["assignments_checked"] == 1
+    assert len(bb.due_calls) == 1
+    stored = json.loads((tmp_path / "reminder-state.json").read_text(encoding="utf-8"))
+    assert stored["due_cache"]["_101_1:x"]["due_at"] == soon
+    # Deadline is cached, so the next check does not open the page again.
+    second = await check_once(config, bb=bb)
+    assert len(bb.due_calls) == 1
+    assert second["due_soon"] == 1 and second["mail_sent"] is True
+    assert "作业提醒" in FakeSMTP.calls[0]["subject"]
+
+
+async def test_check_once_skips_detail_pages_for_submitted_and_tests(tmp_path):
+    config = settings(tmp_path)
+    bb = FakeDueBB([item(assignment_id="done", status="submitted", due_at=None),
+                    item(assignment_id="quiz", kind="test", due_at=None)], {})
+    await check_once(config, bb=bb, dry_run=True)
+    assert bb.due_calls in ([], [[]])
+    assert not (tmp_path / "reminder-state.json").exists()
+
+
+def test_parse_due_reads_labelled_detail_row():
+    from ustc_bb_mcp.parsing import parse_due
+
+    html = ('<div id="content"><table><tr><td class="metaLabel">截止日期</td>'
+            '<td class="metaField">2026年12月7日 星期一 下午5:00</td></tr></table></div>')
+    due, text = parse_due(html)
+    assert due and due.startswith("2026-12-07T17:00") and "2026年12月7日" in text
+    assert parse_due("<div>没有日期</div>") == (None, None)
+
+
+def test_bootstrap_does_not_consume_upcoming_deadline():
+    outcome = evaluate([item(assignment_id="near")], empty_state(), NOW, bootstrap=True)
+    assert outcome["new"] == [] and outcome["due_soon"] == []
+    # The baseline must not mark the deadline as already reminded.
+    assert outcome["state"]["notified"] == {}
+    later = evaluate([item(assignment_id="near")], outcome["state"], NOW + timedelta(minutes=30))
+    assert [entry["id"] for entry in later["due_soon"]] == ["near"]

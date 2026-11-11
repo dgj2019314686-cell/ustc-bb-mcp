@@ -42,6 +42,8 @@ def main() -> int:
     remind_parser.add_argument("--once", action="store_true", help="只检查一次，适合系统定时任务")
     login_parser = commands.add_parser("login", help="登录 BB 并保存会话")
     login_parser.add_argument("--browser", action="store_true", help="在独立浏览器中人工认证")
+    login_parser.add_argument("--channel", choices=["msedge", "chrome"],
+                              help="使用已安装的 Edge/Chrome 登录，免下载 Chromium")
     commands.add_parser("doctor", help="不联网检查安装和配置")
     args = parser.parse_args()
     logging.basicConfig(stream=sys.stderr, level=logging.WARNING, format="%(levelname)s %(message)s")
@@ -77,7 +79,9 @@ def main() -> int:
             async def login():
                 session = Session(settings)
                 try:
-                    return await (session.login_browser() if args.browser else session.ensure_session())
+                    if args.browser:
+                        return await session.login_browser(args.channel)
+                    return await session.ensure_session()
                 finally:
                     await session.close()
             result = asyncio.run(login())

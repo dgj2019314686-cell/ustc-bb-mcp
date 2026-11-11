@@ -515,3 +515,13 @@ def parse_announcements(html: str, url: str, course_id: str) -> list[Announcemen
         result.append(Announcement(id=identifier, course_id=course_id, title=title,
                                    body=text, url=source, date=_date(_text(block))))
     return result
+
+
+def parse_due(html: str) -> tuple[str | None, str | None]:
+    """Due date of one assignment, read from its detail page.
+
+    The course content list page carries no due date at all, so a caller that
+    needs deadlines has to open each assignment; this is the cheap parser for
+    that request.
+    """
+    return _due(_soup(html))

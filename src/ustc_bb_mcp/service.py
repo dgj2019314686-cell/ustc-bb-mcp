@@ -16,6 +16,7 @@ from .parsing import (
     parse_content,
     parse_course_menu,
     parse_courses,
+    parse_due,
     parse_grades,
 )
 
@@ -173,6 +174,33 @@ class Blackboard:
             except BBError as error:
                 warnings.append(f"{course.name}：查询失败（{error.code}）。")
         return Result(message=f"读取到 {len(items)} 项作业或测试入口。", data={"assignments": items}, complete=not warnings, warnings=warnings)
+
+    async def due_dates(self, items, *, concurrency: int = 4):
+        """Read each assignment page for its due date, in bounded parallel.
+
+        Returns ({key: {"due_at", "due_text"}}, warnings) where key is
+        "course_id:id". Tests are skipped: opening them could start an attempt.
+        """
+        results: dict[str, dict] = {}
+        warnings: list[str] = []
+        semaphore = asyncio.Semaphore(max(1, concurrency))
+
+        async def one(item):
+            if item.get("kind") == "test" or not item.get("url"):
+                return
+            key = f"{item.get('course_id', '')}:{item.get('id', '')}"
+            async with semaphore:
+                try:
+                    response = await self.session.get(item["url"])
+                except BBError as error:
+                    warnings.append(f"{item.get('course_name', '未知课程')}：截止日期读取失败（{error.code}）。")
+                    return
+            due, due_text = parse_due(response.text)
+            if due or due_text:
+                results[key] = {"due_at": due, "due_text": due_text}
+
+        await asyncio.gather(*(one(item) for item in items))
+        return results, warnings
 
     async def detail(self, assignment):
         # Do not launch assessments or consume their attempts just to inspect them.
