@@ -1,0 +1,46 @@
+[project]
+name = "ustc-bb-mcp"
+version = "0.1.0"
+description = "Local MCP tools for USTC Blackboard courses, files and assignments"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
+dependencies = [
+  "mcp==2.3.0",
+  "pyustc==1.2.1",
+  "httpx>=0.28.1,<0.29",
+  "beautifulsoup4>=4.13,<5",
+  "playwright>=1.55,<2",
+  "keyring>=25,<26",
+  "platformdirs>=4,<5",
+  "pydantic>=2.11,<3",
+]
+
+[project.urls]
+Homepage = "https://github.com/quantai1314/ustc-bb-mcp"
+Repository = "https://github.com/quantai1314/ustc-bb-mcp"
+Issues = "https://github.com/quantai1314/ustc-bb-mcp/issues"
+
+[project.scripts]
+ustc-bb-mcp = "ustc_bb_mcp.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = ["pytest>=8,<10", "pytest-asyncio>=1,<2", "ruff>=0.12,<1", "build>=1,<2"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]

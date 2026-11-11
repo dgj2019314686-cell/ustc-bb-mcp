@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "ustc-bb": {
+      "command": "uv",
+      "args": [
+        "--directory",
+        "D:\\Project\\ustc-bb-mcp",
+        "run",
+        "--frozen",
+        "ustc-bb-mcp",
+        "serve"
+      ]
+    }
+  }
+}

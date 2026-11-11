@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+.env
+cred.json
+*storage_state*.json
+session.json
+profile/
+downloads/
+browser-profile/
+config.json
