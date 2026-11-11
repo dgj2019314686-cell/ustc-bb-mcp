@@ -97,7 +97,7 @@ uv run ustc-bb-mcp login --browser
 - “下载电磁学课程最新的两份 PDF 课件。”
 - “读取所有课程最近的公告，整理与考试有关的信息。”
 
-公告总结由使用工具的 AI 客户端完成。本项目不提供定时提醒、跨课程全文索引、教师批改或自动答题。
+公告总结由使用工具的 AI 客户端完成。MCP 工具本身不提供定时提醒、跨课程全文索引、教师批改或自动答题；可选的本机邮件提醒见下文「作业邮件提醒」。
 
 ### 如何理解查询结果
 
@@ -117,11 +117,44 @@ uv run ustc-bb-mcp login --browser
 
 开发和演示阶段不会自行向真实课程提交。需要实际提交验证时，应由用户明确指定作业和文件，并通过上述预览确认流程。
 
+## 作业邮件提醒（可选）
+
+MCP 工具本身是按需调用的，不包含定时器。如需「新作业邮件通知 + 截止前 1 天提醒」，可以使用独立的 `remind` 命令。该功能**不是 agent**：它只是一个固定周期的检查循环，仅识别科目名称与截止日期，不做任何自主决策，也绝不代替用户提交作业。
+
+配置科大邮箱（[mail.ustc.edu.cn](https://mail.ustc.edu.cn/) 的同一账号，通过学校 SMTP 服务器发送）：
+
+```
+uv run ustc-bb-mcp mail-configure
+```
+
+邮箱密码保存到系统凭据库（与登录密码分开存储）；如学校要求客户端专用密码或授权码，请填写对应凭据。也可通过环境变量提供：`BB_MAIL_USR`（邮箱地址）、`BB_MAIL_PWD`（密码）、`BB_SMTP_HOST`（默认 `smtp.ustc.edu.cn`）、`BB_SMTP_PORT`（默认 465，SSL）。
+
+启动定时检查（默认每 60 分钟一次）：
+
+```
+uv run ustc-bb-mcp remind --interval 120
+```
+
+如果已有系统定时任务（cron、计划任务等），可以只检查一次后退出，由外部调度重复执行：
+
+```
+uv run ustc-bb-mcp remind --once
+```
+
+行为说明：
+
+- 每次检查拉取全部课程的作业，与本地状态对比后，把「新布置的作业」和「24 小时内截止且未提交的作业」合并成一封摘要邮件发到你的科大邮箱。
+- 首次运行只记录基线、不发邮件，避免把已有作业全部当作新作业。
+- 同一作业的同一截止时间只提醒一次；截止时间变更后会再次提醒。
+- 状态为已提交或已评分的作业不会提醒；没有明确截止日期的作业不会触发截止提醒。
+- 发送失败时本地状态不推进，下个周期自动重试。
+- 提交作业仍需通过 BB 页面或 `bb_submit_assignment` 的预览确认流程完成。
+
 ## 本地数据
 
 未设置 `BB_DATA_DIR` 时，使用 `platformdirs` 返回的当前用户数据目录：Windows 通常在 `%LOCALAPPDATA%\ustc-bb-mcp`，macOS 在 `~/Library/Application Support/ustc-bb-mcp`，Linux 在 `~/.local/share/ustc-bb-mcp`。
 
-其中 `config.json` 保存账号配置，`session.json` 保存登录会话，`browser-profile/` 保存人工登录使用的独立浏览器配置。密码存于系统凭据库或仅由环境变量提供。下载默认进入用户下载目录下的 `USTC-BB`，可用 `BB_OUTPUT_DIR` 更改。会话与下载内容留在本机，工具读取到的课程信息会返回给调用它的 MCP 客户端。
+其中 `config.json` 保存账号配置（含 `mail-configure` 写入的邮箱地址），`session.json` 保存登录会话，`reminder-state.json` 保存作业提醒的已见记录与已提醒标记，`browser-profile/` 保存人工登录使用的独立浏览器配置。密码存于系统凭据库或仅由环境变量提供。下载默认进入用户下载目录下的 `USTC-BB`，可用 `BB_OUTPUT_DIR` 更改。会话与下载内容留在本机，工具读取到的课程信息会返回给调用它的 MCP 客户端。
 
 ## 常见问题
 
@@ -137,6 +170,9 @@ uv run ustc-bb-mcp login --browser
 | 查询显示 `unknown` 或 `complete=false` | 根据返回的失败信息检查原始页面；不要据此认定作业已提交或不存在 |
 | 提交预览令牌过期或内容不匹配 | 重新生成预览并确认，不能复用旧令牌 |
 | 提交后结果待确认 | 打开 BB 提交历史核验回执与附件，不自动重复提交 |
+| `remind` 提示 `mail_not_configured` | 运行 `mail-configure`，或设置 `BB_MAIL_USR`/`BB_MAIL_PWD` |
+| `remind` 提示 `mail_send_failed` | 检查 `smtp.ustc.edu.cn` 是否可达、密码是否为客户端专用密码、是否需要校园网环境 |
+| 首次运行 `remind` 没有收到邮件 | 正常行为：首次运行只记录基线，之后的检查才会报告新作业 |
 
 ## 开发与验证
 

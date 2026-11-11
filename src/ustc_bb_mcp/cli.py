@@ -33,6 +33,10 @@ def main() -> int:
     commands.add_parser("serve", help="启动 stdio MCP 服务")
     config_parser = commands.add_parser("configure", help="将密码存入系统凭据库")
     config_parser.add_argument("--username")
+    commands.add_parser("mail-configure", help="保存科大邮箱 SMTP 凭据到系统凭据库")
+    remind_parser = commands.add_parser("remind", help="定时检查作业并通过科大邮箱提醒（无 agent）")
+    remind_parser.add_argument("--interval", type=float, default=60, help="检查间隔（分钟），默认 60")
+    remind_parser.add_argument("--once", action="store_true", help="只检查一次，适合系统定时任务")
     login_parser = commands.add_parser("login", help="登录 BB 并保存会话")
     login_parser.add_argument("--browser", action="store_true", help="在独立浏览器中人工认证")
     commands.add_parser("doctor", help="不联网检查安装和配置")
@@ -51,6 +55,18 @@ def main() -> int:
             result = doctor(settings)
         elif args.command == "configure":
             result = configure(settings, args.username)
+        elif args.command == "mail-configure":
+            from .reminder import configure_mail
+            result = configure_mail(settings)
+        elif args.command == "remind":
+            from .reminder import check_once, run_reminder
+
+            async def remind():
+                if args.once:
+                    return await check_once(settings)
+                await run_reminder(settings, args.interval)
+                return None
+            result = asyncio.run(remind())
         else:
             async def login():
                 session = Session(settings)
@@ -59,7 +75,8 @@ def main() -> int:
                 finally:
                     await session.close()
             result = asyncio.run(login())
-        print(json.dumps(result, ensure_ascii=False, indent=2))
+        if result is not None:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
     except BBError as error:
         print(json.dumps(error.as_dict(), ensure_ascii=False), file=sys.stderr)
